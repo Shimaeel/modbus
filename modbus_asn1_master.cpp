@@ -185,12 +185,28 @@ ASN1::Bytes Master::transaction(const ASN1::Bytes& requestPdu)
     }
 
     MBAPHeader respHdr = MBAPHeader::fromBytes(respHeader);
+
+    {
+        std::ostringstream oss;
+        oss << "[Master] RX MBAP: txId=" << respHdr.transactionId
+            << " proto=" << respHdr.protocolId
+            << " length=" << respHdr.length
+            << " unitId=" << static_cast<int>(respHdr.unitId)
+            << "  raw=[";
+        for (size_t i = 0; i < respHeader.size(); ++i)
+            oss << (i ? " " : "") << "0x" << std::hex
+                << static_cast<int>(respHeader[i]);
+        oss << "]";
+        log(oss.str());
+    }
+
     if (respHdr.transactionId != hdr.transactionId)
         throw std::runtime_error("Modbus Master: transaction ID mismatch");
 
     int pduLen = static_cast<int>(respHdr.length) - 1;
     if (pduLen <= 0 || pduLen > static_cast<int>(MAX_PDU_SIZE))
-        throw std::runtime_error("Modbus Master: invalid response PDU length");
+        throw std::runtime_error("Modbus Master: invalid response PDU length (length field=" +
+            std::to_string(respHdr.length) + ", pduLen=" + std::to_string(pduLen) + ")");
 
     // Read response PDU
     ASN1::Bytes respPdu(static_cast<size_t>(pduLen));
