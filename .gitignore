@@ -1,5 +1,5 @@
 build/
+!build/*.exe
 html/
 latex/
 *.o
-*.exe
