@@ -11,8 +11,8 @@ Extend an **existing C++ Modbus client** that:
 
 - Implements the **Modbus protocol from scratch** in plain C++ (no Modbus
   library — no libmodbus, no QModbus, no third-party Modbus stack).
-- Uses **`boost.asio` for I/O** — serial port (RS-485) and TCP socket
-  communication, timers, async event loop.
+- Uses **`boost.asio` for I/O** — currently TCP only; RS-485 serial is
+  planned but not yet implemented.
 
 The goal is to robustly support a mixed fleet of protection relays (SEL, GE,
 and possibly ABB / Siemens later) by making **targeted, minimal, well-tested
@@ -20,6 +20,13 @@ changes** that move the codebase toward the target architecture below.
 
 We are NOT rewriting the client. We are NOT adding new libraries beyond
 the ones already approved (see below).
+
+**Verified hardware (as of 2026-04-29):** SEL-735 firmware R206-V1 (build
+date 2021-12-14), serial 3220400087, Form 5 wiring, reachable at
+`192.168.0.2:502`. First-contact integration test passes 4/4 (FID string,
+serial number, meter form, communication counters all decode correctly via
+FC 03 — confirms TCP, MBAP, big-endian byte order, and address mapping all
+work end-to-end).
 
 ---
 
@@ -72,17 +79,97 @@ fit in <100 lines of plain C++ when needed.
 
 ## Stack
 
-- **Language:** C++ (assume C++17 unless `CMakeLists.txt` / compiler flags
-  say otherwise — check first).
+- **Language:** C++17 (`set(CMAKE_CXX_STANDARD 17)` in `CMakeLists.txt:4`).
 - **Modbus library:** **NONE — implemented from scratch in plain C++.**
-- **I/O library:** `boost.asio` (serial port + TCP socket + timers).
-- **Build system:** _[FILL IN — CMake / Makefile / MSBuild]_
-- **Platform:** _[FILL IN — Linux / Windows / embedded]_
-- **Testing:** _[FILL IN — most likely a hand-rolled test harness, since
-  gtest/Catch2 are external. Confirm with user.]_
+- **I/O library:** `boost.asio` (header-only via `find_package(Boost 1.70)`).
+  `boost::asio::ip::tcp::socket` is implemented; `boost::asio::serial_port`
+  is **not yet written** (RS-485 is future work — see Current Implementation
+  Status below).
+- **Build system:** **CMake 3.16+** (`cmake_minimum_required(VERSION 3.16)`).
+- **Platform:** **Windows + Linux**. CMakeLists.txt links `ws2_32 mswsock` on
+  Windows for Winsock; Linux uses POSIX sockets via Boost.Asio directly.
+- **Testing:** **No test framework.** Validation is via `master/main_master.cpp`,
+  a single executable that performs a first-contact integration test against
+  a real SEL-735 (reads FID string, serial number, meter form, and
+  communication counters; pass/fail printed to stdout).
+- **Compiler warnings:** MSVC `/W4`; GCC/Clang `-Wall -Wextra -Wpedantic`
+  (CMakeLists.txt:47-53).
 
-> Inspect the repo first (`CMakeLists.txt`, `Makefile`, `*.vcxproj`,
-> `find_package(Boost ...)`) before assuming any of the `[FILL IN]` values.
+---
+
+## Current Implementation Status (as of 2026-04-29)
+
+The repo is **not yet** the 6-layer design described below. Snapshot of what
+exists vs. what's planned, derived from code analysis:
+
+### Layout
+
+```
+Modbus_ASN/
+├── master/         main_master.cpp, modbus_master.{cpp,hpp}, transport.{cpp,hpp}
+├── slave/          main_asn1_slave.cpp, modbus_asn1_slave.{cpp,hpp}
+├── asn/            asn1.hpp, modbus_asn1_tlv.hpp     (legacy — see ASN.1 status)
+├── functions/      one .cpp per FC (master-side FC implementations)
+├── modbus_common.hpp   (shared FC enums, MBAP, builders/parsers)
+└── CMakeLists.txt
+```
+
+### What's done
+
+- **Layer 0 (Transport)** — `TcpTransport` only. Synchronous blocking I/O.
+  Per-call timeout via `SO_RCVTIMEO`/`SO_SNDTIMEO` (default 3000 ms,
+  `master/transport.hpp:65`). `disconnect()` on any I/O error.
+- **Layer 1 (Protocol)** — `Modbus::Master` class, 11 FCs implemented
+  (01, 02, 03, 04, 05, 06, 0F, 10, 16, 17, 18). One translation unit per FC
+  in `functions/`. Wire format is **standard Modbus TCP** — no ASN.1 on
+  the wire (master skips it entirely; an earlier round-trip was removed as
+  decorative — see `master/modbus_master.cpp:9-13`).
+- **Slave** — listens on TCP, dispatches incoming PDUs through an
+  `FcDispatcher` that internally round-trips through ASN.1 TLV
+  (`slave/modbus_asn1_slave.cpp:351-392`). Wire format on both sides is
+  standard Modbus; the TLV is purely internal and is identity-equivalent to
+  the raw PDU (vestigial — see "ASN.1 status" below).
+  Handlers registered for FC 01, 02, 03, 04, 05, 06, 0F, 10. **FC 16, 17, 18
+  are NOT registered** — slave returns `ILLEGAL_FUNCTION` for them.
+
+### What's missing
+
+- **Serial / RS-485 transport** — no `SerialTransport` class exists. RTU
+  framing, CRC-16, and inter-frame silent intervals are all unimplemented.
+  Talking to RS-485-only relays will not work without writing this.
+- **Layer 2 (Capability / Device Profile)** — not present. There's no
+  capability cache, no FC fallback table, no per-vendor profiles. An
+  unsupported FC will keep being retried on every call.
+- **Layer 3 (Data Model / Point)** — not present. No tag database, no
+  built-in 32-bit/float combine, no scaling factor application, no
+  STRING/ENUM/BITMAP decoders. App code must combine and scale itself.
+- **Layer 4 / 5** — not present.
+- **Multi-slave support** — `Master` is bound to a single `Transport`. No
+  `SlaveManager`, no per-slave health/state tracking.
+- **Auto-chunking** — `readHoldingRegisters(addr, qty)` does not split
+  requests above the 125-register limit; caller must respect it.
+- **Capability cache / retry policy** — every call is independent. Timeout
+  drops the entire socket (`master/transport.cpp:104-107`).
+
+### Naming oddity to be aware of
+
+Several files carry the `modbus_asn1_*` prefix from an earlier design where
+ASN.1 TLV was on the wire. **It isn't anymore.** The slave still does an
+internal TLV round-trip (no functional value, vestigial). The master has
+none. When touching these files, consider whether a rename to drop the
+`asn1` infix is appropriate — `modbus_asn1_common.hpp` was already renamed
+to `modbus_common.hpp`.
+
+### ASN.1 status
+
+`asn/asn1.hpp` is a hand-rolled BER encoder/decoder. `asn/modbus_asn1_tlv.hpp`
+wraps it as a per-FC TLV layer + dispatcher. **Neither is on the wire.**
+Real protection relays (SEL, GE) speak standard Modbus and have no parser
+for ASN.1 — the TLV layer was a closed-system experiment between this
+repo's master and slave. The master no longer uses it; the slave's
+`processRequest()` round-trips through it but returns standard Modbus PDUs.
+Safe to delete the `asn/` folder + slave's TLV usage if the slave is
+retired, since SEL/GE testing only exercises the master.
 
 ---
 
@@ -252,19 +339,23 @@ identical results.
 
 ## Modbus Function Codes — Reference
 
-| Code | Width  | Description                  | I/O Range       |
-|------|--------|------------------------------|-----------------|
-| 01   | 1-bit  | Read coils                   | 00001 – 10000   |
-| 02   | 1-bit  | Read contacts (discrete in)  | 10001 – 20000   |
-| 05   | 1-bit  | Write single coil            | 00001 – 10000   |
-| 15   | 1-bit  | Write multiple coils         | 00001 – 10000   |
-| 03   | 16-bit | Read holding registers       | 40001 – 50000   |
-| 04   | 16-bit | Read input registers         | 30001 – 40000   |
-| 06   | 16-bit | Write single register        | 40001 – 50000   |
-| 16   | 16-bit | Write multiple registers     | 40001 – 50000   |
-| 22   | 16-bit | Mask write register          | 40001 – 50000   |
-| 23   | 16-bit | Read/write multiple registers| 40001 – 50000   |
-| 24   | 16-bit | Read FIFO queue              | 40001 – 50000   |
+| Code | Width  | Description                  | Master | Slave | SEL-735 |
+|------|--------|------------------------------|:------:|:-----:|:-------:|
+| 01   | 1-bit  | Read coils                   | ✅     | ✅    | ✅       |
+| 02   | 1-bit  | Read contacts (discrete in)  | ✅     | ✅    | ✅       |
+| 05   | 1-bit  | Write single coil            | ✅     | ✅    | ✅       |
+| 15   | 1-bit  | Write multiple coils         | ✅     | ✅    | ❌       |
+| 03   | 16-bit | Read holding registers       | ✅     | ✅    | ✅ (max 125 regs) |
+| 04   | 16-bit | Read input registers         | ✅     | ✅    | ✅ (max 125 regs) |
+| 06   | 16-bit | Write single register        | ✅     | ✅    | ✅ (password-gated) |
+| 16   | 16-bit | Write multiple registers     | ✅     | ❌    | ✅ (max 100 regs, password) |
+| 22   | 16-bit | Mask write register          | ✅     | ❌    | ❌       |
+| 23   | 16-bit | Read/write multiple registers| ✅     | ❌    | ❌       |
+| 24   | 16-bit | Read FIFO queue              | ✅     | ❌    | ❌       |
+
+Master-side I/O ranges per Modicon convention: coils 00001–10000,
+discrete inputs 10001–20000, input registers 30001–40000, holding
+registers 40001–50000. **On the wire, addresses are 0-based.**
 
 ### FC Fallback Table (Layer 2)
 
@@ -279,17 +370,21 @@ identical results.
 
 ### Modbus Exception Codes
 
-| Code | Name                  | App Action                                    |
-|------|-----------------------|-----------------------------------------------|
-| 01   | Illegal Function      | Mark FC unsupported on this slave (permanent) |
-| 02   | Illegal Data Address  | Mark this point unavailable; keep polling     |
-| 03   | Illegal Data Value    | Log offending value + source; programming bug |
-| 04   | Slave Device Failure  | Retry with backoff; alarm on N consecutive    |
-| 06   | Slave Device Busy     | Retry later with backoff                      |
-| 0B   | Gateway Target Failed | Common via serial-to-Ethernet gateways        |
+| Code | Name                  | In `ExCode` enum? | App Action                                    |
+|------|-----------------------|:-----------------:|-----------------------------------------------|
+| 01   | Illegal Function      | ✅ ILLEGAL_FUNCTION | Mark FC unsupported on this slave (permanent) |
+| 02   | Illegal Data Address  | ✅ ILLEGAL_DATA_ADDRESS | Mark this point unavailable; keep polling     |
+| 03   | Illegal Data Value    | ✅ ILLEGAL_DATA_VALUE | Log offending value + source; programming bug |
+| 04   | Slave Device Failure  | ✅ SERVER_DEVICE_FAILURE | Retry with backoff; alarm on N consecutive  |
+| 06   | Slave Device Busy     | ❌ **MISSING**     | Retry later with backoff                      |
+| 08   | Memory Parity Error   | ❌ **MISSING**     | SEL-735 returns this on stored-data checksum error |
+| 0B   | Gateway Target Failed | ❌ **MISSING**     | Common via serial-to-Ethernet gateways        |
 
 Exception reply format: FC byte has high bit set (e.g. FC 03 → 0x83),
-followed by a 1-byte exception code.
+followed by a 1-byte exception code. The current `Modbus::ExCode` enum
+(`modbus_common.hpp:68-73`) covers only codes 01-04. Codes 06, 08, and 0B
+will surface as "Unknown" in `exCodeStr()` — extending the enum is a small
+follow-up that costs nothing.
 
 ---
 
@@ -304,6 +399,38 @@ followed by a 1-byte exception code.
   **Setpoint editing via Modbus is NOT supported** — use AcSELerator.
 - **Transport:** RTU on RS-485 (up to 115.2 kbps), TCP on Ethernet models.
 - **Addressing:** Manuals show 4xxxx (Modicon); on the wire, 0-based.
+
+#### SEL-735 specifics (verified against `735_IM_20231006.pdf`, Appendix E)
+
+- **Supported FCs (Table E.2):** 01, 02, 03, 04, 05, 06, 10. **NOT
+  supported:** 0F, 16, 17, 18 — these will return Exception 01.
+- **Read limits:** 2000 bits per FC 01/02 query; **125 registers** per FC
+  03/04; **100 registers** per FC 10.
+- **Modbus TCP:** Port 502, up to **5 simultaneous sessions**, requires
+  Ethernet card. Standard MBAP with `Protocol ID = 0`.
+- **Exception codes used (Table E.3):** 01, 02, 03, 04, 06, 08. Code 06 =
+  "Busy" (transient — retry); code 08 = "Memory Error" (stored data
+  checksum failed).
+- **Data types (Table E.23):** `INT`, `INTx` (with scale 10/100/1000),
+  `UINT`, `UINTx`, `LONG` (32-bit signed), `LONGy` (with scale
+  10/100/1000/10000), `BITMAP`, `ENUM`, `STRING` (null-terminated ASCII).
+- **Word order for 32-bit:** *"Most significant word in lower address
+  register"* — i.e., big-endian word order (high word first / `ABCD`).
+  Naturally correct given the rest of Modbus is big-endian.
+- **STRING decoding:** each register holds two ASCII chars; high byte is
+  the first char. Loop until NUL byte.
+- **Settable parameters require password handshake** (Section E.8-E.9):
+  write Access Level E password to addr 70-74 via FC 10, then issue write,
+  then save by writing `0x0001` to addr 76. Access times out after 15 min
+  of inactivity. Without this handshake, writes return Exception 04
+  ("Device Error — Invalid Access Level"). **Not yet implemented in code.**
+- **First-contact identity registers** (Table E.26 sheet 1, useful for
+  initial validation):
+  - `0..19` Firmware Identifier (STRING)
+  - `20..39` Serial Number (STRING)
+  - `62` Meter Form (ENUM: 0=Form 9, 1=Form 5, 2=Form 36)
+  - `100..149` Device Word Bit Status (BITMAP)
+  - `160..168` Communication Counters (UINT — sanity check)
 
 ### GE (Multilin UR, 750/760, 489, 8-Series)
 
@@ -320,9 +447,17 @@ followed by a 1-byte exception code.
 
 ## C++ / Asio Conventions
 
-- **Error handling:** _[FILL IN — exceptions? status enums? `std::optional`?
-  Match the existing code.]_ Asio supports both error-code and exception
-  styles; pick whichever the existing transport code uses and stay consistent.
+- **Error handling:** **`std::runtime_error` exceptions** at the public
+  API. Asio is used internally with **error-code overloads** (e.g.,
+  `asio::write(*socket_, buf, ec)` in `master/transport.cpp:89`); on `ec`
+  the transport disconnects and rethrows as `std::runtime_error` with a
+  human-readable message. Modbus exception responses (FC byte high bit set)
+  are detected in `master/modbus_master.cpp:96-101` and rethrown as
+  `std::runtime_error("Modbus exception: <code>")`. Callers must `try/catch`.
+  **Caveat:** error type is currently a string — a typed `ModbusException`
+  carrying the `ExCode` is defined in `asn/modbus_asn1_tlv.hpp:143` but is
+  not used by the master. Consider switching when capability cache logic
+  is added (avoids string parsing).
 - **Asio usage:**
   - One `boost::asio::io_context` per transport instance (or one shared
     across the app — match existing pattern).
@@ -344,8 +479,13 @@ followed by a 1-byte exception code.
 - **Endianness:** Modbus is **big-endian on the wire**. Always serialize
   16-bit values explicitly with `(hi << 8) | lo` rather than `memcpy`-ing
   a `uint16_t` (which is host-endian).
-- **Threading:** _[FILL IN — single-threaded `io_context.run()`? Thread pool?
-  Strands? Match existing.]_ Whatever the existing pattern, document it.
+- **Threading:** **Master is fully synchronous, single-threaded.** Each
+  Modbus transaction is a blocking `send`/`recv` round-trip. There is no
+  `io_context.run()` loop on the master side — `boost::asio` is used in
+  blocking mode. The slave runs an `io_context` with `async_accept` and
+  one `TcpSession` per client, also single-threaded. No strands, no
+  thread pool. Adding parallel polling for multiple slaves will require
+  switching to async (asio coroutines or callbacks).
 - **Headers:** Match existing include-guard or `#pragma once` style.
 - **Naming:** Match existing.
 - **Const-correctness:** Mandatory on new code.
