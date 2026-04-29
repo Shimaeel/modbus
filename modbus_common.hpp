@@ -1,6 +1,6 @@
 #pragma once
 /**
- * @file modbus_asn1_common.hpp
+ * @file modbus_common.hpp
  * @brief Shared Modbus TCP types, constants, and PDU helpers.
  *
  * @details
@@ -20,9 +20,6 @@
  *   | Length         | 2 bytes | number of remaining bytes (uid + pdu)|
  *   | Unit ID        | 1 byte  | slave address (1-247)                |
  */
-
-// Provide ASN1::Bytes alias for files that still reference it.
-#include "asn1.hpp"
 
 #include <array>
 #include <cstdint>
@@ -56,6 +53,9 @@ enum class FC : uint8_t {
     WRITE_SINGLE_REGISTER    = 0x06,  ///< FC 06 - Write single register.
     WRITE_MULTIPLE_COILS     = 0x0F,  ///< FC 15 - Write multiple coils.
     WRITE_MULTIPLE_REGISTERS = 0x10,  ///< FC 16 - Write multiple registers.
+    MASK_WRITE_REGISTER      = 0x16,  ///< FC 22 - Mask write register.
+    READ_WRITE_MULTIPLE_REGS = 0x17,  ///< FC 23 - Read/write multiple registers.
+    READ_FIFO_QUEUE          = 0x18,  ///< FC 24 - Read FIFO queue.
     ERROR_FLAG               = 0x80,  ///< OR'd with FC in exception responses.
 };
 
@@ -265,6 +265,82 @@ inline Bytes buildWriteMultipleRegisters(uint16_t startAddr,
         pdu.push_back(static_cast<uint8_t>(r >> 8));
         pdu.push_back(static_cast<uint8_t>(r & 0xFF));
     }
+    return pdu;
+}
+
+/**
+ * @brief Build a Mask Write Register request PDU (FC 22).
+ * @param address  Register address.
+ * @param andMask  AND mask applied to current value.
+ * @param orMask   OR mask applied after the AND.
+ * @return Standard Modbus PDU: [FC][Addr(2)][AndMask(2)][OrMask(2)].
+ *
+ * Slave computes: result = (current AND andMask) OR (orMask AND (NOT andMask)).
+ */
+inline Bytes buildMaskWriteRegister(uint16_t address,
+                                    uint16_t andMask,
+                                    uint16_t orMask)
+{
+    Bytes pdu;
+    pdu.push_back(static_cast<uint8_t>(FC::MASK_WRITE_REGISTER));
+    pdu.push_back(static_cast<uint8_t>(address >> 8));
+    pdu.push_back(static_cast<uint8_t>(address & 0xFF));
+    pdu.push_back(static_cast<uint8_t>(andMask >> 8));
+    pdu.push_back(static_cast<uint8_t>(andMask & 0xFF));
+    pdu.push_back(static_cast<uint8_t>(orMask >> 8));
+    pdu.push_back(static_cast<uint8_t>(orMask & 0xFF));
+    return pdu;
+}
+
+/**
+ * @brief Build a Read/Write Multiple Registers request PDU (FC 23).
+ * @param readAddr  First register to read.
+ * @param readQty   Number of registers to read (1-125).
+ * @param writeAddr First register to write.
+ * @param writeRegs Register values to write (1-121).
+ * @return Standard Modbus PDU:
+ *         [FC][ReadAddr(2)][ReadQty(2)][WriteAddr(2)][WriteQty(2)][ByteCount][WriteData(N*2)].
+ *
+ * Write happens first, then the read uses the post-write state.
+ */
+inline Bytes buildReadWriteMultipleRegisters(uint16_t readAddr,
+                                             uint16_t readQty,
+                                             uint16_t writeAddr,
+                                             const std::vector<uint16_t>& writeRegs)
+{
+    uint16_t writeQty   = static_cast<uint16_t>(writeRegs.size());
+    uint8_t  byteCount  = static_cast<uint8_t>(writeQty * 2);
+
+    Bytes pdu;
+    pdu.push_back(static_cast<uint8_t>(FC::READ_WRITE_MULTIPLE_REGS));
+    pdu.push_back(static_cast<uint8_t>(readAddr  >> 8));
+    pdu.push_back(static_cast<uint8_t>(readAddr  & 0xFF));
+    pdu.push_back(static_cast<uint8_t>(readQty   >> 8));
+    pdu.push_back(static_cast<uint8_t>(readQty   & 0xFF));
+    pdu.push_back(static_cast<uint8_t>(writeAddr >> 8));
+    pdu.push_back(static_cast<uint8_t>(writeAddr & 0xFF));
+    pdu.push_back(static_cast<uint8_t>(writeQty  >> 8));
+    pdu.push_back(static_cast<uint8_t>(writeQty  & 0xFF));
+    pdu.push_back(byteCount);
+
+    for (uint16_t r : writeRegs) {
+        pdu.push_back(static_cast<uint8_t>(r >> 8));
+        pdu.push_back(static_cast<uint8_t>(r & 0xFF));
+    }
+    return pdu;
+}
+
+/**
+ * @brief Build a Read FIFO Queue request PDU (FC 24).
+ * @param pointerAddr Address of the FIFO pointer register.
+ * @return Standard Modbus PDU: [FC][PointerAddr(2)].
+ */
+inline Bytes buildReadFifoQueue(uint16_t pointerAddr)
+{
+    Bytes pdu;
+    pdu.push_back(static_cast<uint8_t>(FC::READ_FIFO_QUEUE));
+    pdu.push_back(static_cast<uint8_t>(pointerAddr >> 8));
+    pdu.push_back(static_cast<uint8_t>(pointerAddr & 0xFF));
     return pdu;
 }
 
@@ -549,5 +625,79 @@ inline std::vector<uint16_t> parseReadRegistersResponse(const Bytes& pdu)
     }
     return out;
 }
+
+/**
+ * @struct MaskWriteResp
+ * @brief Parsed Mask Write Register echo response (FC 22).
+ */
+struct MaskWriteResp {
+    uint16_t address;   ///< Echoed register address.
+    uint16_t andMask;   ///< Echoed AND mask.
+    uint16_t orMask;    ///< Echoed OR mask.
+};
+
+/**
+ * @brief Parse a Mask Write Register response PDU (FC 22).
+ * @param pdu Raw response PDU: [FC][Addr(2)][AndMask(2)][OrMask(2)] (echo of request).
+ * @return Parsed echo fields. Caller compares against the request to verify.
+ */
+inline MaskWriteResp parseMaskWriteResponse(const Bytes& pdu)
+{
+    if (pdu.size() < 7)
+        throw std::runtime_error("parseMaskWriteResponse: PDU too short");
+    MaskWriteResp r;
+    r.address = (static_cast<uint16_t>(pdu[1]) << 8) | pdu[2];
+    r.andMask = (static_cast<uint16_t>(pdu[3]) << 8) | pdu[4];
+    r.orMask  = (static_cast<uint16_t>(pdu[5]) << 8) | pdu[6];
+    return r;
+}
+
+/**
+ * @brief Parse a Read/Write Multiple Registers response PDU (FC 23).
+ * @param pdu Raw response PDU: [FC][ByteCount(1)][ReadData(N*2)] big-endian.
+ * @return Vector of decoded 16-bit register values from the read portion.
+ */
+inline std::vector<uint16_t> parseReadWriteMultipleResponse(const Bytes& pdu)
+{
+    if (pdu.size() < 2)
+        throw std::runtime_error("parseReadWriteMultipleResponse: PDU too short");
+    uint8_t byteCount = pdu[1];
+    if (pdu.size() < 2 + byteCount)
+        throw std::runtime_error("parseReadWriteMultipleResponse: data truncated");
+    std::vector<uint16_t> out;
+    for (uint8_t i = 0; i < byteCount; i += 2) {
+        uint16_t val = (static_cast<uint16_t>(pdu[2 + i]) << 8) | pdu[2 + i + 1];
+        out.push_back(val);
+    }
+    return out;
+}
+
+/**
+ * @brief Parse a Read FIFO Queue response PDU (FC 24).
+ * @param pdu Raw response PDU:
+ *            [FC][ByteCount(2)][FifoCount(2)][FifoData(FifoCount*2)] big-endian.
+ *            Note ByteCount here is **2 bytes** (uint16) — different from FC 03/04.
+ * @return Vector of decoded 16-bit FIFO values (up to 31 per Modbus spec).
+ */
+inline std::vector<uint16_t> parseReadFifoQueueResponse(const Bytes& pdu)
+{
+    if (pdu.size() < 5)
+        throw std::runtime_error("parseReadFifoQueueResponse: PDU too short");
+    uint16_t byteCount = (static_cast<uint16_t>(pdu[1]) << 8) | pdu[2];
+    uint16_t fifoCount = (static_cast<uint16_t>(pdu[3]) << 8) | pdu[4];
+    if (fifoCount > 31)
+        throw std::runtime_error("parseReadFifoQueueResponse: fifoCount > 31");
+    if (pdu.size() < 3u + byteCount)
+        throw std::runtime_error("parseReadFifoQueueResponse: data truncated");
+    std::vector<uint16_t> out;
+    for (uint16_t i = 0; i < fifoCount; ++i) {
+        size_t offset = 5 + static_cast<size_t>(i) * 2;
+        uint16_t val = (static_cast<uint16_t>(pdu[offset]) << 8) | pdu[offset + 1];
+        out.push_back(val);
+    }
+    return out;
+}
+
+/** @} */
 
 } // namespace Modbus

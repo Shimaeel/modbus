@@ -16,8 +16,8 @@
  *   - Input registers   (uint16, read-only from master)
  */
 
-#include "modbus_asn1_common.hpp"
-#include "modbus_asn1_tlv.hpp"
+#include "../modbus_common.hpp"
+#include "../asn/modbus_asn1_tlv.hpp"
 #include <boost/asio.hpp>
 #include <array>
 #include <atomic>

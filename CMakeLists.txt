@@ -11,14 +11,26 @@ find_package(Boost 1.70 REQUIRED)
 
 # ---- Slave executable ----
 add_executable(modbus_slave
-    modbus_asn1_slave.cpp
-    main_asn1_slave.cpp
+    slave/modbus_asn1_slave.cpp
+    slave/main_asn1_slave.cpp
 )
 
 # ---- Master executable ----
 add_executable(modbus_master
-    modbus_asn1_master.cpp
-    main_asn1_master.cpp
+    master/modbus_master.cpp
+    master/transport.cpp
+    master/main_master.cpp
+    functions/read_coils.cpp
+    functions/read_discrete_inputs.cpp
+    functions/read_holding_registers.cpp
+    functions/read_input_registers.cpp
+    functions/write_single_coil.cpp
+    functions/write_single_register.cpp
+    functions/write_multiple_coils.cpp
+    functions/write_multiple_registers.cpp
+    functions/mask_write_register.cpp
+    functions/read_write_multiple_registers.cpp
+    functions/read_fifo_queue.cpp
 )
 
 # ---- Link Boost (header-only) + platform libs ----

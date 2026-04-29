@@ -20,7 +20,7 @@
  * are added by simply calling registerHandler().
  */
 
-#include "modbus_asn1_common.hpp"
+#include "../modbus_common.hpp"
 #include "asn1.hpp"
 
 #include <functional>

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pdftotext -v)",
+      "Bash(cd /tmp)",
+      "Bash(pdftotext -f 1 -l 15 -layout \"C:\\\\Users\\\\qures\\\\Downloads\\\\735_IM_20231006.pdf\" -)"
+    ]
+  }
+}
