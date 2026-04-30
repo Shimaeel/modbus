@@ -1,24 +1,59 @@
 #pragma once
 /**
  * @file modbus_common.hpp
- * @brief Shared Modbus TCP types, constants, and PDU helpers.
+ * @brief Shared Modbus TCP types, constants, and PDU helpers (Layer 1).
  *
  * @details
- * Transport : Modbus TCP (MBAP header, port 502)\n
- * Encoding  : Standard Modbus TCP wire format (raw big-endian bytes)
+ * This single header is the **Layer 1 protocol toolbox** used by both the
+ * master and the slave. It declares everything Modbus-specific that is
+ * independent of who is talking — function codes, exception codes, the
+ * MBAP header struct, request builders, and response parsers — so neither
+ * side has to repeat itself.
  *
- * PDU layout (bytes on wire):
+ * - Transport : Modbus TCP (MBAP header, port 502).
+ * - Encoding  : Standard Modbus wire format (raw big-endian bytes).
+ *
+ * ### What lives here
+ * - `enum class FC`     — Modbus function-code values (`READ_COILS = 0x01`, …).
+ * - `enum class ExCode` — Modbus exception codes returned in error responses.
+ * - `struct MBAPHeader` — 7-byte TCP application-protocol header + (de)serializer.
+ * - `struct Frame`      — convenience: MBAP header + raw PDU.
+ * - `buildXxxRequest()` — master-side PDU builders (one per FC).
+ * - `parseXxxRequest()` — slave-side PDU parsers (one per FC).
+ * - `buildXxxResponse()` — slave-side response builders.
+ * - `parseXxxResponse()` — master-side response parsers.
+ *
+ * ### Wire formats
  * @code
- *   [MBAP 7 bytes][FC 1 byte][payload bytes ...]
+ *   PDU (function-code + payload, no transport framing):
+ *     [FC 1 byte][payload bytes ...]
+ *
+ *   Modbus TCP frame (this is what hits the network):
+ *     [MBAP 7 bytes][FC 1 byte][payload bytes ...]
+ *
+ *   MBAP header layout (big-endian):
+ *     | Transaction ID (2) | Protocol ID (2) | Length (2) | Unit ID (1) |
  * @endcode
  *
- * MBAP header:
- *   | Field          | Size    | Notes                                |
- *   |----------------|---------|--------------------------------------|
- *   | Transaction ID | 2 bytes | big-endian, echoed by slave          |
- *   | Protocol ID    | 2 bytes | always 0x0000                        |
- *   | Length         | 2 bytes | number of remaining bytes (uid + pdu)|
- *   | Unit ID        | 1 byte  | slave address (1-247)                |
+ * ### Where this fits in the stack
+ * @dot
+ * digraph common {
+ *   rankdir=TB;
+ *   node [shape=box, style="rounded,filled"];
+ *   App      [label="Application\n(main_master.cpp)", fillcolor="#e6f0ff"];
+ *   FCFiles  [label="Per-FC files\n(functions/*.cpp)", fillcolor="#cfe2ff"];
+ *   Master   [label="Modbus::Master\n(modbus_master.cpp)", fillcolor="#cfe2ff"];
+ *   Common   [label="modbus_common.hpp\n(THIS FILE)", fillcolor="#fff2cc"];
+ *   Trans    [label="Transport (TCP)", fillcolor="#ffe6b3"];
+ *   App -> Master -> FCFiles -> Common;
+ *   Master -> Common [label="MBAP build/parse"];
+ *   Common -> Trans  [label="bytes"];
+ * }
+ * @enddot
+ *
+ * @note No `<boost/asio.hpp>` include here — this header is **plain C++**
+ *       so unit tests can feed PDU byte vectors directly without spinning
+ *       up a socket.
  */
 
 #include <array>

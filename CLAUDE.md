@@ -23,10 +23,21 @@ the ones already approved (see below).
 
 **Verified hardware (as of 2026-04-29):** SEL-735 firmware R206-V1 (build
 date 2021-12-14), serial 3220400087, Form 5 wiring, reachable at
-`192.168.0.2:502`. First-contact integration test passes 4/4 (FID string,
-serial number, meter form, communication counters all decode correctly via
-FC 03 — confirms TCP, MBAP, big-endian byte order, and address mapping all
-work end-to-end).
+`192.168.0.2:502`. **Full FC test suite passes 10/10** — all 7
+SEL-735-supported function codes (01, 02, 03, 04, 05, 06, 10) verified
+end-to-end:
+
+- FC 03: FID string, serial, meter form, comm counters — all decoded.
+- FC 04: returns identical FID as FC 03 (confirms FC 03 ≡ FC 04 on SEL).
+- FC 02: 6 digital input contacts read.
+- FC 01: 23 coil bits (outputs + RB1..RB16) read.
+- FC 05: RB01 toggle ON→OFF round-trip with read-back verification.
+- FC 06: Reset Communication Counters executed (counters cleared post-write).
+- FC 10: Reset Max/Min + Reset Peak Demand executed in one multi-register
+  write.
+
+This confirms TCP, MBAP, big-endian byte order, address mapping, transaction
+ID handling, and standard Modbus exception detection all work end-to-end.
 
 ---
 
@@ -424,6 +435,12 @@ follow-up that costs nothing.
   then save by writing `0x0001` to addr 76. Access times out after 15 min
   of inactivity. Without this handshake, writes return Exception 04
   ("Device Error — Invalid Access Level"). **Not yet implemented in code.**
+- **Control I/O / reset commands (addr 75-80) DO NOT need a password** —
+  empirically verified 2026-04-29 on R206-V1 firmware: FC 06 to addr 78
+  (Reset Comm Counters) and FC 10 to addr 79-80 (Reset Max/Min + Reset
+  Peak) both succeeded without any access-level setup. The password
+  requirement applies only to *settable parameters* (MID, TID, Password
+  registers, Device Time, User Map Registers) — not to control commands.
 - **First-contact identity registers** (Table E.26 sheet 1, useful for
   initial validation):
   - `0..19` Firmware Identifier (STRING)

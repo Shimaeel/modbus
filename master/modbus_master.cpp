@@ -1,15 +1,38 @@
 /**
  * @file modbus_master.cpp
- * @brief Modbus Master core — Layer 1 (no asio).
+ * @brief `Modbus::Master` core — constructor + shared `transaction()` primitive.
  *
- * Hosts the constructor and the shared @ref Master::transaction primitive.
- * Each Modbus function code lives in its own translation unit under
- * `functions/` (one file per FC) — see e.g. functions/read_coils.cpp.
+ * @details
+ * This translation unit hosts the heart of the Layer 1 protocol code.
+ * Each Modbus function code has its own translation unit under
+ * `functions/` (one file per FC, e.g. `functions/read_coils.cpp`); they
+ * all funnel through `Master::transaction()` defined here.
  *
- * Wire format: standard Modbus TCP (MBAP header + raw PDU). The earlier
- * ASN.1 TLV round-trip on request/response was decorative — `tlvToPdu`
- * after `pduToTlv` returns the original PDU by construction, so it caught
- * no real bugs and added per-transaction overhead. Removed.
+ * ### Wire format
+ * Standard **Modbus TCP**: an MBAP header (7 bytes) followed by a raw PDU.
+ * No CRC, no escape sequences — TCP itself handles integrity. An earlier
+ * ASN.1 TLV round-trip on request/response was decorative (`tlvToPdu` after
+ * `pduToTlv` is identity by construction, so it caught no real bugs while
+ * adding per-transaction overhead) and has been removed.
+ *
+ * ### Transaction flow
+ * @dot
+ * digraph txn {
+ *   rankdir=TB;
+ *   node [shape=box, style="rounded,filled"];
+ *   in     [label="caller passes PDU\n(FC + payload)", fillcolor="#e6f0ff"];
+ *   conn   [label="connect() if not connected", fillcolor="#fff2cc"];
+ *   mbap   [label="build MBAP header\n(txId++ / proto / len / unitId)", fillcolor="#cfe2ff"];
+ *   frame  [label="frame = MBAP + PDU", fillcolor="#cfe2ff"];
+ *   tx     [label="transport.send(frame)", fillcolor="#ffe6b3"];
+ *   rx1    [label="transport.recv(7)\n -> MBAP header", fillcolor="#ffe6b3"];
+ *   match  [label="check txId match", fillcolor="#fff2cc"];
+ *   rx2    [label="transport.recv(length-1)\n -> PDU body", fillcolor="#ffe6b3"];
+ *   excep  [label="if FC high bit set\n -> throw exception", fillcolor="#f4cccc"];
+ *   ret    [label="return response PDU", fillcolor="#c6efce"];
+ *   in -> conn -> mbap -> frame -> tx -> rx1 -> match -> rx2 -> excep -> ret;
+ * }
+ * @enddot
  */
 
 #include "modbus_master.hpp"
@@ -21,13 +44,39 @@ namespace Modbus {
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
+
+/**
+ * @brief Bind a Master to a Transport.
+ * @param transport Layer 0 transport reference (must outlive `*this`).
+ * @param unitId    Default Modbus unit/slave ID for outgoing requests.
+ * @param logCb     Optional log callback.
+ */
 Master::Master(Transport& transport, uint8_t unitId, LogCb logCb)
     : transport_(transport), unitId_(unitId), logCb_(std::move(logCb))
 {}
 
 // ---------------------------------------------------------------------------
-// transaction  --  ASN.1 TLV encode -> send -> receive -> TLV decode
+// transaction — single Modbus TCP round-trip
 // ---------------------------------------------------------------------------
+
+/**
+ * @brief Send one Modbus request PDU and return the response PDU.
+ * @param requestPdu Application PDU (FC byte + payload, no MBAP).
+ * @return Response PDU (FC byte + payload, MBAP stripped).
+ *
+ * @throws std::runtime_error
+ *   - "not connected" — transport could not be opened.
+ *   - "transaction ID mismatch" — slave's txId did not echo ours.
+ *   - "invalid response PDU length" — MBAP length field out of range.
+ *   - "Modbus exception: <name>" — slave returned an exception response
+ *     (FC byte's high bit was set).
+ *
+ * @details
+ * Every public FC method in the master ends up calling this primitive
+ * with its already-built request PDU. The bookkeeping (MBAP, txId
+ * matching, exception detection) is centralised here so per-FC files
+ * stay tiny.
+ */
 Bytes Master::transaction(const Bytes& requestPdu)
 {
     if (!isConnected() && !connect())
