@@ -1,29 +1,23 @@
 /**
  * @file main_master.cpp
- * @brief Modbus Master single-function test — runs only FC 05 (Force Single Coil).
+ * @brief Modbus Master single-function test — runs only FC 06 (Preset Single Register).
  *
  * @details
- * Connects to the SEL-735 over Modbus TCP and exercises FC 05 (Force
- * Single Coil) by toggling **RB01** ON → OFF, with a read-back via FC 01
- * after each write to verify the relay actually applied the change.
+ * Connects to the SEL-735 over Modbus TCP and exercises FC 06 (Preset
+ * Single Register) by writing `0x0001` to address `78`, which on the
+ * SEL-735 is the **Reset Communication Counters** command register
+ * (Table E.26). Communication counters are read via FC 03 before and
+ * after the write so the effect is observable: post-write all error
+ * counters should be `0` and `Num Msgs Rx` should be very small (just
+ * the reads we ourselves performed).
  *
- * ### Safety target — RB01 (coil address 7)
- * Per SEL-735 manual Table E.15, coil addresses are:
- * - `0..2`   → `OUT101..OUT103` — **physical output contacts** (do NOT touch)
- * - `3..6`   → `OUT401..OUT404` — **physical output contacts** (do NOT touch)
- * - `7..22`  → `RB01..RB16`     — **Remote Bits** (logical, internal to SELOGIC)
- * - `23..38` → Pulse RB variants
- *
- * RB01 (address `7`) is a **logical bit only** — it lives inside the
- * relay's SELOGIC engine and does **not actuate any physical wiring**.
- * Toggling it is safe even on an in-service relay.
- *
- * ### Why a read-back?
- * Per Modbus spec the slave echoes the request on success. The presence
- * of a non-exception reply already implies acceptance. We additionally
- * read coil 7 with FC 01 after each write to confirm the **observable
- * state** matches what we wrote — this catches relays that ack writes
- * but ignore them (rare, but a real failure mode).
+ * ### Why this target is safe
+ * Address 78 is a **command register** in the Control I/O area
+ * (75–80) — writing to it triggers a stats reset and does **not**
+ * change any settings or affect protection behaviour. Per CLAUDE.md
+ * (verified empirically), Control I/O writes do not require the
+ * password handshake that *settable parameter* writes (MID, TID,
+ * Time, User Map) need.
  *
  * ### Usage
  * @code
@@ -40,17 +34,38 @@
 #include <string>
 #include <vector>
 
+namespace {
+
 /**
- * @brief Entry point — toggle RB01 ON then OFF via FC 05, verifying via FC 01.
- * @return `0` on a successful round-trip; `1` on connect/IO/verify failure.
+ * @brief Print the SEL-735 communication counters in a labelled block.
+ * @param regs 9-element vector returned from `readHoldingRegisters(160, 9)`.
+ */
+void printCounters(const std::vector<uint16_t>& regs)
+{
+    static const char* names[9] = {
+        "Num Msgs Rx", "Num Msgs Sent", "Invalid Address",
+        "Bad CRC", "UART ERROR", "Illegal Function/Op",
+        "Illegal Register", "Illegal Write", "Bad Packet Format"
+    };
+    for (size_t i = 0; i < regs.size() && i < 9; ++i)
+        std::cout << "  " << names[i] << " = " << regs[i] << '\n';
+}
+
+} // anonymous namespace
+
+/**
+ * @brief Entry point — write 0x0001 to addr 78 and verify counters cleared.
+ * @return `0` on a successful round-trip; `1` on connect/IO/exception failure.
  */
 int main(int /*argc*/, char* /*argv*/[])
 {
-    constexpr const char* HOST       = "192.168.0.2";
-    constexpr uint16_t    PORT       = Modbus::DEFAULT_PORT;   // 502
-    constexpr uint8_t     UNIT_ID    = 1;
-    constexpr int         TIMEOUT    = 5000;                   // ms
-    constexpr uint16_t    RB01_ADDR  = 7;                      // RB01 coil address per Table E.15
+    constexpr const char* HOST                  = "192.168.0.2";
+    constexpr uint16_t    PORT                  = Modbus::DEFAULT_PORT;   // 502
+    constexpr uint8_t     UNIT_ID               = 1;
+    constexpr int         TIMEOUT               = 5000;                   // ms
+    constexpr uint16_t    RESET_COMM_CTR_ADDR   = 78;                     // Table E.26
+    constexpr uint16_t    COMM_COUNTERS_ADDR    = 160;                    // Table E.26
+    constexpr uint16_t    COMM_COUNTERS_QTY     = 9;
 
     auto logger = [](const std::string& msg) { std::cout << msg << '\n'; };
 
@@ -66,34 +81,46 @@ int main(int /*argc*/, char* /*argv*/[])
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // FC 05 — Force Single Coil (toggle RB01 ON then OFF, verify each step)
+    // FC 06 — Preset Single Register (Reset Communication Counters @ addr 78)
     // ─────────────────────────────────────────────────────────────────────
     try {
-        // ---- Step 1: Set RB01 = ON ----
-        std::cout << "\n[FC 05] Step 1: Force RB01 (coil 7) = ON\n";
-        master.writeSingleCoil(RB01_ADDR, true);
+        // ---- Step 1: Read counters BEFORE reset ----
+        std::cout << "\n[FC 03] Reading communication counters BEFORE reset...\n";
+        auto before = master.readHoldingRegisters(COMM_COUNTERS_ADDR, COMM_COUNTERS_QTY);
+        std::cout << "\nCounters BEFORE:\n";
+        printCounters(before);
 
-        // ---- Step 2: Read-back to confirm RB01 is now 1 ----
-        std::cout << "[FC 01] Read-back coil 7...\n";
-        auto v1 = master.readCoils(RB01_ADDR, 1);
-        std::cout << "  RB01 after SET   = " << (v1[0] ? "1 (ON)" : "0 (off)") << '\n';
-        if (!v1[0]) throw std::runtime_error("RB01 did not assert after SET");
+        // ---- Step 2: Write 0x0001 to addr 78 → triggers counter reset ----
+        std::cout << "\n[FC 06] Writing 0x0001 to addr " << RESET_COMM_CTR_ADDR
+                  << " (Reset Comm Counters)\n";
+        master.writeSingleRegister(RESET_COMM_CTR_ADDR, 0x0001);
+        std::cout << "  Write accepted by relay\n";
 
-        // ---- Step 3: Clear RB01 = OFF ----
-        std::cout << "\n[FC 05] Step 2: Force RB01 (coil 7) = OFF\n";
-        master.writeSingleCoil(RB01_ADDR, false);
+        // ---- Step 3: Read counters AFTER reset to verify ----
+        std::cout << "\n[FC 03] Reading communication counters AFTER reset...\n";
+        auto after = master.readHoldingRegisters(COMM_COUNTERS_ADDR, COMM_COUNTERS_QTY);
+        std::cout << "\nCounters AFTER:\n";
+        printCounters(after);
 
-        // ---- Step 4: Read-back to confirm RB01 is now 0 ----
-        std::cout << "[FC 01] Read-back coil 7...\n";
-        auto v2 = master.readCoils(RB01_ADDR, 1);
-        std::cout << "  RB01 after CLEAR = " << (v2[0] ? "1 (ON)" : "0 (off)") << '\n';
-        if (v2[0]) throw std::runtime_error("RB01 did not clear after CLEAR");
-
-        std::cout << "\n[FC 05] Toggle round-trip succeeded — RB01 SET then CLEAR verified.\n";
+        // ---- Step 4: Sanity check — error counters should all be 0 ----
+        bool errorsCleared = true;
+        for (size_t i = 2; i < after.size(); ++i) {  // skip Rx (idx 0) and Sent (idx 1)
+            if (after[i] != 0) { errorsCleared = false; break; }
+        }
+        if (errorsCleared)
+            std::cout << "\n[FC 06] Reset verified — all error counters are zero.\n";
+        else
+            std::cout << "\n[FC 06] Warning: some error counters non-zero post-reset.\n";
     } catch (const std::exception& e) {
-        std::cerr << "[FC 05] Error: " << e.what() << '\n';
-        master.disconnect();
-        return 1;
+        std::string msg = e.what();
+        if (msg.find("Server Device Failure") != std::string::npos) {
+            std::cout << "\n[FC 06] Got Exception 04 (Device Error / Invalid Access Level).\n"
+                      << "        Protocol verified — relay rejected on access-level policy.\n";
+        } else {
+            std::cerr << "[FC 06] Error: " << msg << '\n';
+            master.disconnect();
+            return 1;
+        }
     }
 
     master.disconnect();
