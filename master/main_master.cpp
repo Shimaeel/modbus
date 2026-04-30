@@ -1,23 +1,33 @@
 /**
  * @file main_master.cpp
- * @brief Modbus Master single-function test — runs only FC 06 (Preset Single Register).
+ * @brief Modbus Master single-function test — runs only FC 16 (Preset Multiple Registers).
  *
  * @details
- * Connects to the SEL-735 over Modbus TCP and exercises FC 06 (Preset
- * Single Register) by writing `0x0001` to address `78`, which on the
- * SEL-735 is the **Reset Communication Counters** command register
- * (Table E.26). Communication counters are read via FC 03 before and
- * after the write so the effect is observable: post-write all error
- * counters should be `0` and `Num Msgs Rx` should be very small (just
- * the reads we ourselves performed).
+ * Connects to the SEL-735 over Modbus TCP and exercises FC 16 (Preset
+ * Multiple Registers, on-wire byte `0x10`) by writing two reset
+ * commands in a single transaction:
+ *
+ * | Addr | Command (Table E.26)       | Value written |
+ * |------|----------------------------|---------------|
+ * | 79   | Reset Max/Min Values       | `0x0001`      |
+ * | 80   | Reset Peak Demand          | `0x0001`      |
+ *
+ * Both registers live in the SEL-735 Control I/O area (75–80), which
+ * empirically does not require an access-level password handshake.
+ * The relay applies both resets atomically (from its perspective) in
+ * one round-trip — that's the whole point of FC 16 vs looping FC 06.
  *
  * ### Why this target is safe
- * Address 78 is a **command register** in the Control I/O area
- * (75–80) — writing to it triggers a stats reset and does **not**
- * change any settings or affect protection behaviour. Per CLAUDE.md
- * (verified empirically), Control I/O writes do not require the
- * password handshake that *settable parameter* writes (MID, TID,
- * Time, User Map) need.
+ * - Reset Max/Min only clears tracked min/max measurement values.
+ * - Reset Peak Demand only clears the demand peak history.
+ * - Neither changes any protection setting or actuates any output.
+ *
+ * ### Verification
+ * The slave echoes `[FC, addr_hi, addr_lo, qty_hi, qty_lo]` on
+ * success — `Master::transaction` already throws on any exception
+ * response (high bit set on FC), so a clean return implies acceptance.
+ * For Control I/O resets there's no easy "read-back" symmetric to FC
+ * 06's counter check; protocol acceptance is the test bar here.
  *
  * ### Usage
  * @code
@@ -34,38 +44,18 @@
 #include <string>
 #include <vector>
 
-namespace {
-
 /**
- * @brief Print the SEL-735 communication counters in a labelled block.
- * @param regs 9-element vector returned from `readHoldingRegisters(160, 9)`.
- */
-void printCounters(const std::vector<uint16_t>& regs)
-{
-    static const char* names[9] = {
-        "Num Msgs Rx", "Num Msgs Sent", "Invalid Address",
-        "Bad CRC", "UART ERROR", "Illegal Function/Op",
-        "Illegal Register", "Illegal Write", "Bad Packet Format"
-    };
-    for (size_t i = 0; i < regs.size() && i < 9; ++i)
-        std::cout << "  " << names[i] << " = " << regs[i] << '\n';
-}
-
-} // anonymous namespace
-
-/**
- * @brief Entry point — write 0x0001 to addr 78 and verify counters cleared.
- * @return `0` on a successful round-trip; `1` on connect/IO/exception failure.
+ * @brief Entry point — write two reset commands via FC 16.
+ * @return `0` on a successful round-trip; `1` on connect/IO failure.
  */
 int main(int /*argc*/, char* /*argv*/[])
 {
-    constexpr const char* HOST                  = "192.168.0.2";
-    constexpr uint16_t    PORT                  = Modbus::DEFAULT_PORT;   // 502
-    constexpr uint8_t     UNIT_ID               = 1;
-    constexpr int         TIMEOUT               = 5000;                   // ms
-    constexpr uint16_t    RESET_COMM_CTR_ADDR   = 78;                     // Table E.26
-    constexpr uint16_t    COMM_COUNTERS_ADDR    = 160;                    // Table E.26
-    constexpr uint16_t    COMM_COUNTERS_QTY     = 9;
+    constexpr const char* HOST              = "192.168.0.2";
+    constexpr uint16_t    PORT              = Modbus::DEFAULT_PORT;   // 502
+    constexpr uint8_t     UNIT_ID           = 1;
+    constexpr int         TIMEOUT           = 5000;                   // ms
+    constexpr uint16_t    RESET_MAXMIN_ADDR = 79;                     // Table E.26
+    constexpr uint16_t    RESET_PEAK_ADDR   = 80;                     // Table E.26
 
     auto logger = [](const std::string& msg) { std::cout << msg << '\n'; };
 
@@ -81,43 +71,25 @@ int main(int /*argc*/, char* /*argv*/[])
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // FC 06 — Preset Single Register (Reset Communication Counters @ addr 78)
+    // FC 16 — Preset Multiple Registers (Reset Max/Min + Reset Peak Demand)
     // ─────────────────────────────────────────────────────────────────────
     try {
-        // ---- Step 1: Read counters BEFORE reset ----
-        std::cout << "\n[FC 03] Reading communication counters BEFORE reset...\n";
-        auto before = master.readHoldingRegisters(COMM_COUNTERS_ADDR, COMM_COUNTERS_QTY);
-        std::cout << "\nCounters BEFORE:\n";
-        printCounters(before);
+        std::cout << "\n[FC 16] Writing 2 registers starting at address "
+                  << RESET_MAXMIN_ADDR << "\n";
+        std::cout << "  addr 79 = 0x0001  (Reset Max/Min Values)\n";
+        std::cout << "  addr 80 = 0x0001  (Reset Peak Demand)\n";
 
-        // ---- Step 2: Write 0x0001 to addr 78 → triggers counter reset ----
-        std::cout << "\n[FC 06] Writing 0x0001 to addr " << RESET_COMM_CTR_ADDR
-                  << " (Reset Comm Counters)\n";
-        master.writeSingleRegister(RESET_COMM_CTR_ADDR, 0x0001);
-        std::cout << "  Write accepted by relay\n";
+        master.writeMultipleRegisters(RESET_MAXMIN_ADDR, {0x0001, 0x0001});
 
-        // ---- Step 3: Read counters AFTER reset to verify ----
-        std::cout << "\n[FC 03] Reading communication counters AFTER reset...\n";
-        auto after = master.readHoldingRegisters(COMM_COUNTERS_ADDR, COMM_COUNTERS_QTY);
-        std::cout << "\nCounters AFTER:\n";
-        printCounters(after);
-
-        // ---- Step 4: Sanity check — error counters should all be 0 ----
-        bool errorsCleared = true;
-        for (size_t i = 2; i < after.size(); ++i) {  // skip Rx (idx 0) and Sent (idx 1)
-            if (after[i] != 0) { errorsCleared = false; break; }
-        }
-        if (errorsCleared)
-            std::cout << "\n[FC 06] Reset verified — all error counters are zero.\n";
-        else
-            std::cout << "\n[FC 06] Warning: some error counters non-zero post-reset.\n";
+        std::cout << "\n[FC 16] Write accepted by relay.\n"
+                  << "        Both reset commands executed in one transaction.\n";
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg.find("Server Device Failure") != std::string::npos) {
-            std::cout << "\n[FC 06] Got Exception 04 (Device Error / Invalid Access Level).\n"
+            std::cout << "\n[FC 16] Got Exception 04 (Device Error / Invalid Access Level).\n"
                       << "        Protocol verified — relay rejected on access-level policy.\n";
         } else {
-            std::cerr << "[FC 06] Error: " << msg << '\n';
+            std::cerr << "[FC 16] Error: " << msg << '\n';
             master.disconnect();
             return 1;
         }
