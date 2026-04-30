@@ -1,16 +1,17 @@
 /**
  * @file main_master.cpp
- * @brief Modbus Master single-function test — runs only FC 01 (Read Coils).
+ * @brief Modbus Master single-function test — runs only FC 02 (Read Discrete Inputs).
  *
  * @details
- * Connects to the SEL-735 over Modbus TCP, performs a single FC 01
- * (Read Coils) call covering all 23 coil bits per the SEL-735 manual
- * Table E.15 (`OUT101..OUT404` + `RB01..RB16`), prints the decoded
- * states, and exits.
+ * Connects to the SEL-735 over Modbus TCP, performs a single FC 02
+ * (Read Discrete Inputs) call covering the 6 input contacts per the
+ * SEL-735 manual Table E.8 (`IN101, IN102, IN401..IN404`), prints the
+ * decoded states, and exits.
  *
- * This is intentionally one-FC-at-a-time. To test a different function
- * code, swap the call to `master.readCoils(...)` for the FC you want to
- * exercise, rebuild, and run.
+ * Discrete inputs are **read-only** 1-bit signals coming **into** the
+ * relay from external wiring (breaker auxiliary contacts, manual
+ * switches, status from other equipment). Inputs that are not
+ * physically installed return `0`.
  *
  * ### Usage
  * @code
@@ -31,20 +32,18 @@ namespace {
 
 /**
  * @brief Print a boolean vector with friendly labels for the SEL-735
- *        coil layout (per Table E.15 of the manual).
+ *        discrete-input layout (per Table E.8 of the manual).
  *
- * Indices 0..6  → physical outputs (`OUT101..OUT103`, `OUT401..OUT404`).
- * Indices 7..22 → Remote Bits (`RB01..RB16`, internal SELOGIC bits).
+ * Indices 0..5 → physical inputs `IN101, IN102, IN401..IN404`.
+ * Inputs that aren't installed return `0`.
  */
-void printCoils(const std::vector<bool>& bits)
+void printInputs(const std::vector<bool>& bits)
 {
-    static const char* names[23] = {
-        "OUT101", "OUT102", "OUT103",
-        "OUT401", "OUT402", "OUT403", "OUT404",
-        "RB01", "RB02", "RB03", "RB04", "RB05", "RB06", "RB07", "RB08",
-        "RB09", "RB10", "RB11", "RB12", "RB13", "RB14", "RB15", "RB16"
+    static const char* names[6] = {
+        "IN101", "IN102",
+        "IN401", "IN402", "IN403", "IN404"
     };
-    for (size_t i = 0; i < bits.size() && i < 23; ++i) {
+    for (size_t i = 0; i < bits.size() && i < 6; ++i) {
         std::cout << "  " << names[i] << " = " << (bits[i] ? "1 (ON) " : "0 (off)") << '\n';
     }
 }
@@ -52,7 +51,7 @@ void printCoils(const std::vector<bool>& bits)
 } // anonymous namespace
 
 /**
- * @brief Entry point — read 23 coils via FC 01 and print their state.
+ * @brief Entry point — read 6 discrete inputs via FC 02 and print their state.
  * @return `0` on success, `1` on connect or transaction failure.
  */
 int main(int /*argc*/, char* /*argv*/[])
@@ -76,16 +75,16 @@ int main(int /*argc*/, char* /*argv*/[])
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // FC 01 — Read Coil Status (OUT101..OUT404 + RB01..RB16)
+    // FC 02 — Read Discrete Inputs (IN101..IN404)
     // ─────────────────────────────────────────────────────────────────────
     try {
-        std::cout << "\n[FC 01] Reading 23 coils starting at address 0...\n";
-        auto coils = master.readCoils(0, 23);
-        std::cout << "\nCoil status:\n";
-        printCoils(coils);
-        std::cout << "\n[FC 01] Read complete.\n";
+        std::cout << "\n[FC 02] Reading 6 discrete inputs starting at address 0...\n";
+        auto inputs = master.readDiscreteInputs(0, 6);
+        std::cout << "\nInput status:\n";
+        printInputs(inputs);
+        std::cout << "\n[FC 02] Read complete.\n";
     } catch (const std::exception& e) {
-        std::cerr << "[FC 01] Error: " << e.what() << '\n';
+        std::cerr << "[FC 02] Error: " << e.what() << '\n';
         master.disconnect();
         return 1;
     }
