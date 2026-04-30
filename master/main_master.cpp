@@ -1,18 +1,29 @@
 /**
  * @file main_master.cpp
- * @brief Modbus Master single-function test — runs only FC 04 (Read Input Registers).
+ * @brief Modbus Master single-function test — runs only FC 05 (Force Single Coil).
  *
  * @details
- * Connects to the SEL-735 over Modbus TCP and performs a single FC 04
- * (Read Input Registers) call to fetch the **Firmware Identifier**
- * string at addresses 0..19.
+ * Connects to the SEL-735 over Modbus TCP and exercises FC 05 (Force
+ * Single Coil) by toggling **RB01** ON → OFF, with a read-back via FC 01
+ * after each write to verify the relay actually applied the change.
  *
- * Per the SEL-735 manual (verified empirically), the relay treats
- * **FC 04 identically to FC 03** — both functions index into the same
- * Modbus Register Map (Table E.26). Reading the FID via FC 04 should
- * therefore return exactly the same `"SEL-735-..."` string that FC 03
- * returned in the previous run. This confirms the FC 04 wire framing
- * works and that the SEL-equivalence quirk holds on this firmware.
+ * ### Safety target — RB01 (coil address 7)
+ * Per SEL-735 manual Table E.15, coil addresses are:
+ * - `0..2`   → `OUT101..OUT103` — **physical output contacts** (do NOT touch)
+ * - `3..6`   → `OUT401..OUT404` — **physical output contacts** (do NOT touch)
+ * - `7..22`  → `RB01..RB16`     — **Remote Bits** (logical, internal to SELOGIC)
+ * - `23..38` → Pulse RB variants
+ *
+ * RB01 (address `7`) is a **logical bit only** — it lives inside the
+ * relay's SELOGIC engine and does **not actuate any physical wiring**.
+ * Toggling it is safe even on an in-service relay.
+ *
+ * ### Why a read-back?
+ * Per Modbus spec the slave echoes the request on success. The presence
+ * of a non-exception reply already implies acceptance. We additionally
+ * read coil 7 with FC 01 after each write to confirm the **observable
+ * state** matches what we wrote — this catches relays that ack writes
+ * but ignore them (rare, but a real failure mode).
  *
  * ### Usage
  * @code
@@ -29,41 +40,17 @@
 #include <string>
 #include <vector>
 
-namespace {
-
 /**
- * @brief Decode a register vector into a printable ASCII string.
- *
- * Each 16-bit register holds two ASCII characters with the **high byte
- * first** (Modbus convention). Stops at the first NUL byte; non-printable
- * bytes are shown as `.`.
- */
-std::string regsToAscii(const std::vector<uint16_t>& regs)
-{
-    std::string out;
-    for (uint16_t r : regs) {
-        char hi = static_cast<char>((r >> 8) & 0xFF);
-        char lo = static_cast<char>(r & 0xFF);
-        if (hi == '\0') break;
-        out.push_back((hi >= 0x20 && hi < 0x7F) ? hi : '.');
-        if (lo == '\0') break;
-        out.push_back((lo >= 0x20 && lo < 0x7F) ? lo : '.');
-    }
-    return out;
-}
-
-} // anonymous namespace
-
-/**
- * @brief Entry point — read the SEL-735 Firmware Identifier via FC 04.
- * @return `0` on success, `1` on connect or transaction failure.
+ * @brief Entry point — toggle RB01 ON then OFF via FC 05, verifying via FC 01.
+ * @return `0` on a successful round-trip; `1` on connect/IO/verify failure.
  */
 int main(int /*argc*/, char* /*argv*/[])
 {
-    constexpr const char* HOST    = "192.168.0.2";
-    constexpr uint16_t    PORT    = Modbus::DEFAULT_PORT;   // 502
-    constexpr uint8_t     UNIT_ID = 1;
-    constexpr int         TIMEOUT = 5000;                   // ms
+    constexpr const char* HOST       = "192.168.0.2";
+    constexpr uint16_t    PORT       = Modbus::DEFAULT_PORT;   // 502
+    constexpr uint8_t     UNIT_ID    = 1;
+    constexpr int         TIMEOUT    = 5000;                   // ms
+    constexpr uint16_t    RB01_ADDR  = 7;                      // RB01 coil address per Table E.15
 
     auto logger = [](const std::string& msg) { std::cout << msg << '\n'; };
 
@@ -79,25 +66,32 @@ int main(int /*argc*/, char* /*argv*/[])
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // FC 04 — Read Input Registers (FID via FC 04, addr 0..19)
-    // SEL-735 treats FC 04 == FC 03, so the result should be the FID string.
+    // FC 05 — Force Single Coil (toggle RB01 ON then OFF, verify each step)
     // ─────────────────────────────────────────────────────────────────────
     try {
-        std::cout << "\n[FC 04] Reading 20 input registers starting at address 0...\n";
-        auto regs = master.readInputRegisters(0, 20);
+        // ---- Step 1: Set RB01 = ON ----
+        std::cout << "\n[FC 05] Step 1: Force RB01 (coil 7) = ON\n";
+        master.writeSingleCoil(RB01_ADDR, true);
 
-        std::cout << "\nRaw 16-bit register values (decimal):\n";
-        for (size_t i = 0; i < regs.size(); ++i)
-            std::cout << "  reg[" << i << "] = " << regs[i] << '\n';
+        // ---- Step 2: Read-back to confirm RB01 is now 1 ----
+        std::cout << "[FC 01] Read-back coil 7...\n";
+        auto v1 = master.readCoils(RB01_ADDR, 1);
+        std::cout << "  RB01 after SET   = " << (v1[0] ? "1 (ON)" : "0 (off)") << '\n';
+        if (!v1[0]) throw std::runtime_error("RB01 did not assert after SET");
 
-        std::cout << "\nDecoded as ASCII (Firmware Identifier):\n"
-                  << "  \"" << regsToAscii(regs) << "\"\n";
+        // ---- Step 3: Clear RB01 = OFF ----
+        std::cout << "\n[FC 05] Step 2: Force RB01 (coil 7) = OFF\n";
+        master.writeSingleCoil(RB01_ADDR, false);
 
-        std::cout << "\n[FC 04] Read complete.\n";
-        std::cout << "  Note: SEL-735 maps FC 04 to the same area as FC 03,\n"
-                  << "        so this should match what FC 03 returned.\n";
+        // ---- Step 4: Read-back to confirm RB01 is now 0 ----
+        std::cout << "[FC 01] Read-back coil 7...\n";
+        auto v2 = master.readCoils(RB01_ADDR, 1);
+        std::cout << "  RB01 after CLEAR = " << (v2[0] ? "1 (ON)" : "0 (off)") << '\n';
+        if (v2[0]) throw std::runtime_error("RB01 did not clear after CLEAR");
+
+        std::cout << "\n[FC 05] Toggle round-trip succeeded — RB01 SET then CLEAR verified.\n";
     } catch (const std::exception& e) {
-        std::cerr << "[FC 04] Error: " << e.what() << '\n';
+        std::cerr << "[FC 05] Error: " << e.what() << '\n';
         master.disconnect();
         return 1;
     }
