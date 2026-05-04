@@ -106,12 +106,15 @@ void dumpBits(const std::vector<bool>& bits)
  * @brief Entry point — runs the read-only discovery probe.
  * @return `0` if connection succeeded; `1` on connect failure.
  */
-int main(int /*argc*/, char* /*argv*/[])
+int main(int argc, char* argv[])
 {
-    constexpr const char* HOST    = "192.168.0.21";
-    constexpr uint16_t    PORT    = Modbus::DEFAULT_PORT;   // 502
-    constexpr uint8_t     UNIT_ID = 1;
-    constexpr int         TIMEOUT = 5000;                   // ms
+    // GE UR L90 default Modbus Slave Address is 254 (manual §5.3.5.8).
+    // The relay will silently close the TCP session if the request's
+    // Unit ID does not match the configured slave address.
+    const char* HOST    = (argc > 1) ? argv[1] : "192.168.0.21";
+    uint16_t    PORT    = (argc > 2) ? static_cast<uint16_t>(std::stoi(argv[2])) : Modbus::DEFAULT_PORT;
+    uint8_t     UNIT_ID = (argc > 3) ? static_cast<uint8_t> (std::stoi(argv[3])) : 254;
+    constexpr int TIMEOUT = 5000;                   // ms
 
     auto logger = [](const std::string& msg) { std::cout << msg << '\n'; };
 
