@@ -19,6 +19,9 @@ add_executable(modbus_slave
 set(MASTER_CORE_SOURCES
     master/modbus_master.cpp
     master/transport.cpp
+    master/scan.cpp
+    master/snippets.cpp
+    master/verify.cpp
     functions/read_coils.cpp
     functions/read_discrete_inputs.cpp
     functions/read_holding_registers.cpp
@@ -44,16 +47,32 @@ add_executable(modbus_ge_discover
     ${MASTER_CORE_SOURCES}
 )
 
+# ---- Phase A demo: snippets + shared memory + scan + verify ----
+add_executable(modbus_phaseA
+    master/main_phaseA.cpp
+    ${MASTER_CORE_SOURCES}
+)
+
+# ---- GE wide-range scan (read-only, vendor-agnostic) ----
+add_executable(modbus_ge_scan
+    master/main_ge_scan.cpp
+    ${MASTER_CORE_SOURCES}
+)
+
 # ---- Link Boost (header-only) + platform libs ----
 target_link_libraries(modbus_slave         PRIVATE Boost::headers)
 target_link_libraries(modbus_master        PRIVATE Boost::headers)
 target_link_libraries(modbus_ge_discover   PRIVATE Boost::headers)
+target_link_libraries(modbus_phaseA        PRIVATE Boost::headers)
+target_link_libraries(modbus_ge_scan       PRIVATE Boost::headers)
 
 if(WIN32)
     # Boost.Asio on Windows still needs Winsock
     target_link_libraries(modbus_slave         PRIVATE ws2_32 mswsock)
     target_link_libraries(modbus_master        PRIVATE ws2_32 mswsock)
     target_link_libraries(modbus_ge_discover   PRIVATE ws2_32 mswsock)
+    target_link_libraries(modbus_phaseA        PRIVATE ws2_32 mswsock)
+    target_link_libraries(modbus_ge_scan       PRIVATE ws2_32 mswsock)
 endif()
 
 # ---- Compiler warnings ----
@@ -61,8 +80,12 @@ if(MSVC)
     target_compile_options(modbus_slave         PRIVATE /W4)
     target_compile_options(modbus_master        PRIVATE /W4)
     target_compile_options(modbus_ge_discover   PRIVATE /W4)
+    target_compile_options(modbus_phaseA        PRIVATE /W4)
+    target_compile_options(modbus_ge_scan       PRIVATE /W4)
 else()
     target_compile_options(modbus_slave         PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(modbus_master        PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(modbus_ge_discover   PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(modbus_phaseA        PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(modbus_ge_scan       PRIVATE -Wall -Wextra -Wpedantic)
 endif()

@@ -50,7 +50,8 @@
  */
 int main(int /*argc*/, char* /*argv*/[])
 {
-    constexpr const char* HOST              = "192.168.0.2";
+    constexpr const char* HOST    
+              = "192.168.0.2";
     constexpr uint16_t    PORT              = Modbus::DEFAULT_PORT;   // 502
     constexpr uint8_t     UNIT_ID           = 1;
     constexpr int         TIMEOUT           = 5000;                   // ms

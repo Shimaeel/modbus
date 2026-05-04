@@ -102,6 +102,9 @@ enum class ExCode : uint8_t {
     ILLEGAL_DATA_ADDRESS     = 0x02,  ///< Address out of valid range.
     ILLEGAL_DATA_VALUE       = 0x03,  ///< Value out of valid range.
     SERVER_DEVICE_FAILURE    = 0x04,  ///< Unrecoverable server error.
+    SERVER_DEVICE_BUSY       = 0x06,  ///< Slave is busy — retry later (SEL-735 transient).
+    MEMORY_PARITY_ERROR      = 0x08,  ///< Stored-data checksum failure (SEL-735).
+    GATEWAY_TARGET_FAILED    = 0x0B,  ///< Gateway could not reach target slave.
 };
 
 /**
@@ -116,6 +119,9 @@ inline std::string exCodeStr(ExCode c)
     case ExCode::ILLEGAL_DATA_ADDRESS:  return "Illegal Data Address";
     case ExCode::ILLEGAL_DATA_VALUE:    return "Illegal Data Value";
     case ExCode::SERVER_DEVICE_FAILURE: return "Server Device Failure";
+    case ExCode::SERVER_DEVICE_BUSY:    return "Server Device Busy";
+    case ExCode::MEMORY_PARITY_ERROR:   return "Memory Parity Error";
+    case ExCode::GATEWAY_TARGET_FAILED: return "Gateway Target Failed";
     default: return "Unknown";
     }
 }
