@@ -96,7 +96,6 @@ int main(int argc, char* argv[])
     // ─────────────────────────────────────────────────────────────────────
     // [Probe A] FC 05 — Write Single Coil
     // ─────────────────────────────────────────────────────────────────────
-    /*
     try {
         std::cout << "\n[Probe A] FC 05 — Write Single Coil\n";
         std::cout << "  addr=0x" << std::hex << TARGET_FC05_COIL_ADDR << std::dec
@@ -107,12 +106,10 @@ int main(int argc, char* argv[])
         std::cerr << "  -> FC 05 failed: " << e.what() << '\n';
     }
     hr();
-    */
 
     // ─────────────────────────────────────────────────────────────────────
     // [Probe B] FC 06 — Write Single Register
     // ─────────────────────────────────────────────────────────────────────
-    /*
     try {
         std::cout << "\n[Probe B] FC 06 — Write Single Register\n";
         std::cout << "  addr=0x" << std::hex << TARGET_FC06_REG_ADDR
@@ -123,12 +120,10 @@ int main(int argc, char* argv[])
         std::cerr << "  -> FC 06 failed: " << e.what() << '\n';
     }
     hr();
-    */
 
     // ─────────────────────────────────────────────────────────────────────
     // [Probe C] FC 15 — Write Multiple Coils
     // ─────────────────────────────────────────────────────────────────────
-    /*
     try {
         std::cout << "\n[Probe C] FC 15 — Write Multiple Coils\n";
         std::vector<bool> coilVals = { false, false, false, false };  // TODO
@@ -140,12 +135,10 @@ int main(int argc, char* argv[])
         std::cerr << "  -> FC 15 failed: " << e.what() << '\n';
     }
     hr();
-    */
 
     // ─────────────────────────────────────────────────────────────────────
     // [Probe D] FC 16 — Write Multiple Registers
     // ─────────────────────────────────────────────────────────────────────
-    /*
     try {
         std::cout << "\n[Probe D] FC 16 — Write Multiple Registers\n";
         std::vector<uint16_t> regVals = { 0x0000, 0x0000 };           // TODO
@@ -157,7 +150,6 @@ int main(int argc, char* argv[])
         std::cerr << "  -> FC 16 failed: " << e.what() << '\n';
     }
     hr();
-    */
 
     // ─────────────────────────────────────────────────────────────────────
     // [Probe E] FC 22 — Mask Write Register
@@ -165,7 +157,6 @@ int main(int argc, char* argv[])
     // Use that first to confirm the FC is even supported, before any
     // bit-changing call.
     // ─────────────────────────────────────────────────────────────────────
-    /*
     try {
         std::cout << "\n[Probe E] FC 22 — Mask Write Register\n";
         std::cout << "  addr=0x" << std::hex << TARGET_FC22_REG_ADDR
@@ -179,12 +170,10 @@ int main(int argc, char* argv[])
         std::cerr << "  -> FC 22 failed: " << e.what() << '\n';
     }
     hr();
-    */
 
     // ─────────────────────────────────────────────────────────────────────
     // [Probe F] FC 23 — Read/Write Multiple Registers
     // ─────────────────────────────────────────────────────────────────────
-    /*
     try {
         std::cout << "\n[Probe F] FC 23 — Read/Write Multiple Registers\n";
         std::vector<uint16_t> writeVals = { 0x0000 };                 // TODO
@@ -203,7 +192,6 @@ int main(int argc, char* argv[])
         std::cerr << "  -> FC 23 failed: " << e.what() << '\n';
     }
     hr();
-    */
 
     std::cout << "\n[GE-Write] All probes commented out by default — "
                  "uncomment one and rebuild.\n";
