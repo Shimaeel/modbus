@@ -47,16 +47,24 @@ add_executable(modbus_ge_discover
     ${MASTER_CORE_SOURCES}
 )
 
+# ---- GE UR write probe (one FC at a time, all commented by default) ----
+add_executable(modbus_ge_write
+    master/main_ge_write.cpp
+    ${MASTER_CORE_SOURCES}
+)
+
 # ---- Link Boost (header-only) + platform libs ----
 target_link_libraries(modbus_slave         PRIVATE Boost::headers)
 target_link_libraries(modbus_master        PRIVATE Boost::headers)
 target_link_libraries(modbus_ge_discover   PRIVATE Boost::headers)
+target_link_libraries(modbus_ge_write      PRIVATE Boost::headers)
 
 if(WIN32)
     # Boost.Asio on Windows still needs Winsock
     target_link_libraries(modbus_slave         PRIVATE ws2_32 mswsock)
     target_link_libraries(modbus_master        PRIVATE ws2_32 mswsock)
     target_link_libraries(modbus_ge_discover   PRIVATE ws2_32 mswsock)
+    target_link_libraries(modbus_ge_write      PRIVATE ws2_32 mswsock)
 endif()
 
 # ---- Compiler warnings ----
@@ -64,8 +72,10 @@ if(MSVC)
     target_compile_options(modbus_slave         PRIVATE /W4)
     target_compile_options(modbus_master        PRIVATE /W4)
     target_compile_options(modbus_ge_discover   PRIVATE /W4)
+    target_compile_options(modbus_ge_write      PRIVATE /W4)
 else()
     target_compile_options(modbus_slave         PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(modbus_master        PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(modbus_ge_discover   PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(modbus_ge_write      PRIVATE -Wall -Wextra -Wpedantic)
 endif()
