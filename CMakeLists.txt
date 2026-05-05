@@ -53,11 +53,18 @@ add_executable(modbus_ge_write
     ${MASTER_CORE_SOURCES}
 )
 
+# ---- GE UR EVT.TXT format-discovery test (read first 244 bytes only) ----
+add_executable(modbus_ge_evt_test
+    master/main_ge_evt_test.cpp
+    ${MASTER_CORE_SOURCES}
+)
+
 # ---- Link Boost (header-only) + platform libs ----
 target_link_libraries(modbus_slave         PRIVATE Boost::headers)
 target_link_libraries(modbus_master        PRIVATE Boost::headers)
 target_link_libraries(modbus_ge_discover   PRIVATE Boost::headers)
 target_link_libraries(modbus_ge_write      PRIVATE Boost::headers)
+target_link_libraries(modbus_ge_evt_test   PRIVATE Boost::headers)
 
 if(WIN32)
     # Boost.Asio on Windows still needs Winsock
@@ -65,6 +72,7 @@ if(WIN32)
     target_link_libraries(modbus_master        PRIVATE ws2_32 mswsock)
     target_link_libraries(modbus_ge_discover   PRIVATE ws2_32 mswsock)
     target_link_libraries(modbus_ge_write      PRIVATE ws2_32 mswsock)
+    target_link_libraries(modbus_ge_evt_test   PRIVATE ws2_32 mswsock)
 endif()
 
 # ---- Compiler warnings ----
@@ -73,9 +81,11 @@ if(MSVC)
     target_compile_options(modbus_master        PRIVATE /W4)
     target_compile_options(modbus_ge_discover   PRIVATE /W4)
     target_compile_options(modbus_ge_write      PRIVATE /W4)
+    target_compile_options(modbus_ge_evt_test   PRIVATE /W4)
 else()
     target_compile_options(modbus_slave         PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(modbus_master        PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(modbus_ge_discover   PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(modbus_ge_write      PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(modbus_ge_evt_test   PRIVATE -Wall -Wextra -Wpedantic)
 endif()
